@@ -47,7 +47,7 @@ def _Net_zero(self, zero_param_diffs = True):
     zero_param_diffs: If True, also zero the parameter blob diffs,
                       else skip parameter blobs.
     """
-    
+
     for blob_name, blob in self.blobs.items():
         blob.data[...] = 0
         blob.diff[...] = 0
@@ -87,6 +87,35 @@ def _Net_backward_from_layer(self, start_name, start_diff, diffs=None, zero_high
 
     return self.backward(start=start_name, diffs=diffs)
 
+def _Net_backward_from_to_layer(self, start_name, start_diff, end_name, diffs=None, zero_higher=False):
+    """
+    Backward pass starting from somewhere in the middle of the
+    network, starting with the provided diffs.
+
+    Take
+    start_name: layer at which to begin the backward pass
+    start_diff: diff to set at start_name layer
+    diffs: list of diffs to return in addition to bottom diffs.
+    zero_higher: whether or not to zero out higher layers to reflect the true 0 derivative or leave them alone to save time.
+
+    Give
+    outs: {blob name: diff ndarray} dict.
+    """
+
+    if start_diff.shape != self.blobs[start_name].diff.shape:
+        raise Exception('Expected start_diff of shape %s but got %s' % (self.blobs[start_name].diff.shape, start_diff.shape))
+
+    self.blobs[start_name].diff[...] = start_diff
+
+    if zero_higher:
+        past_start = False
+        for blob_name, blob in self.blobs.items():
+            if past_start:
+                blob.diff[...] = 0
+            if blob_name == start_name:
+                past_start = True
+
+    return self.backward(start=start_name, end=end_name, diffs=diffs)
 
 def _Net_deconv_from_layer(self, start_name, start_diff, diffs=None, zero_higher=False):
     """
@@ -388,6 +417,7 @@ Net.blobs = _Net_blobs
 Net.params = _Net_params
 Net.zero = _Net_zero
 Net.backward_from_layer = _Net_backward_from_layer
+Net.backward_from_to_layer = _Net_backward_from_to_layer
 Net.deconv_from_layer = _Net_deconv_from_layer
 Net.forward = _Net_forward
 Net.backward = _Net_backward
