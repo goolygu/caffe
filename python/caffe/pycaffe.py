@@ -236,11 +236,14 @@ def _Net_forward(self, blobs=None, start=None, end=None, **kwargs):
         outputs = set(self.outputs + blobs)
 
     if kwargs:
+        # print "input", self.inputs
+        # print "key", kwargs.keys()
         if set(kwargs.keys()) != set(self.inputs):
             raise Exception('Input blob arguments do not match net inputs.')
         # Set input according to defined shapes and make arrays single and
         # C-contiguous as Caffe expects.
         for in_, blob in kwargs.iteritems():
+            # print "in", in_
             if blob.shape[0] != self.blobs[in_].num:
                 raise Exception('Input is not batch sized')
             self.blobs[in_].data[...] = blob
@@ -249,6 +252,34 @@ def _Net_forward(self, blobs=None, start=None, end=None, **kwargs):
 
     # Unpack blobs to extract
     return {out: self.blobs[out].data for out in outputs}
+
+def _Net_forward_from_to(self, start=None, end=None):
+    """
+    Forward pass: prepare inputs and run the net forward.
+
+    Take
+    blobs: list of blobs to return in addition to output blobs.
+    kwargs: Keys are input blob names and values are blob ndarrays.
+            For formatting inputs for Caffe, see Net.preprocess().
+            If None, input is taken from data layers.
+    start: optional name of layer at which to begin the forward pass
+    end: optional name of layer at which to finish the forward pass (inclusive)
+
+    Give
+    outs: {blob name: blob ndarray} dict.
+    """
+    if start is not None:
+        start_ind = list(self._layer_names).index(start)
+    else:
+        start_ind = 0
+
+    if end is not None:
+        end_ind = list(self._layer_names).index(end)
+    else:
+        end_ind = len(self.layers) - 1
+	# print "ind", start_ind, end_ind
+    self._forward(start_ind, end_ind)
+
 
 
 def _Net_backward(self, diffs=None, start=None, end=None, **kwargs):
@@ -420,6 +451,7 @@ Net.backward_from_layer = _Net_backward_from_layer
 Net.backward_from_to_layer = _Net_backward_from_to_layer
 Net.deconv_from_layer = _Net_deconv_from_layer
 Net.forward = _Net_forward
+Net.forward_from_to = _Net_forward_from_to
 Net.backward = _Net_backward
 Net.deconv = _Net_deconv
 Net.forward_all = _Net_forward_all
