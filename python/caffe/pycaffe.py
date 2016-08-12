@@ -5,13 +5,16 @@ interface.
 
 from collections import OrderedDict
 try:
-	from itertools import izip_longest
+    from itertools import izip_longest
 except:
-	from itertools import zip_longest as izip_longest
+    from itertools import zip_longest as izip_longest
 import numpy as np
 
-from ._caffe import Net, SGDSolver
+from ._caffe import Net, SGDSolver, NesterovSolver, AdaGradSolver, \
+        RMSPropSolver, AdaDeltaSolver, AdamSolver
 import caffe.io
+
+import six
 
 # We directly update methods from Net here (rather than using composition or
 # inheritance) so that nets created by caffe (e.g., by SGDSolver) will
@@ -25,6 +28,15 @@ def _Net_blobs(self):
     blobs indexed by name
     """
     return OrderedDict(zip(self._blob_names, self._blobs))
+
+
+@property
+def _Net_blob_loss_weights(self):
+    """
+    An OrderedDict (bottom to top, i.e., input to output) of network
+    blob loss weights indexed by name
+    """
+    return OrderedDict(zip(self._blob_names, self._blob_loss_weights))
 
 
 @property
@@ -209,16 +221,19 @@ def _Net_forward(self, blobs=None, start=None, end=None, **kwargs):
     """
     Forward pass: prepare inputs and run the net forward.
 
-    Take
-    blobs: list of blobs to return in addition to output blobs.
-    kwargs: Keys are input blob names and values are blob ndarrays.
-            For formatting inputs for Caffe, see Net.preprocess().
-            If None, input is taken from data layers.
-    start: optional name of layer at which to begin the forward pass
-    end: optional name of layer at which to finish the forward pass (inclusive)
+    Parameters
+    ----------
+    blobs : list of blobs to return in addition to output blobs.
+    kwargs : Keys are input blob names and values are blob ndarrays.
+             For formatting inputs for Caffe, see Net.preprocess().
+             If None, input is taken from data layers.
+    start : optional name of layer at which to begin the forward pass
+    end : optional name of layer at which to finish the forward pass
+          (inclusive)
 
-    Give
-    outs: {blob name: blob ndarray} dict.
+    Returns
+    -------
+    outs : {blob name: blob ndarray} dict.
     """
     if blobs is None:
         blobs = []
@@ -242,9 +257,8 @@ def _Net_forward(self, blobs=None, start=None, end=None, **kwargs):
             raise Exception('Input blob arguments do not match net inputs.')
         # Set input according to defined shapes and make arrays single and
         # C-contiguous as Caffe expects.
-        for in_, blob in kwargs.iteritems():
-            # print "in", in_
-            if blob.shape[0] != self.blobs[in_].num:
+        for in_, blob in six.iteritems(kwargs):
+            if blob.shape[0] != self.blobs[in_].shape[0]:
                 raise Exception('Input is not batch sized')
             self.blobs[in_].data[...] = blob
 
@@ -286,14 +300,17 @@ def _Net_backward(self, diffs=None, start=None, end=None, **kwargs):
     """
     Backward pass: prepare diffs and run the net backward.
 
-    Take
-    diffs: list of diffs to return in addition to bottom diffs.
-    kwargs: Keys are output blob names and values are diff ndarrays.
+    Parameters
+    ----------
+    diffs : list of diffs to return in addition to bottom diffs.
+    kwargs : Keys are output blob names and values are diff ndarrays.
             If None, top diffs are taken from forward loss.
-    start: optional name of layer at which to begin the backward pass
-    end: optional name of layer at which to finish the backward pass (inclusive)
+    start : optional name of layer at which to begin the backward pass
+    end : optional name of layer at which to finish the backward pass
+        (inclusive)
 
-    Give
+    Returns
+    -------
     outs: {blob name: diff ndarray} dict.
     """
     if diffs is None:
@@ -316,10 +333,8 @@ def _Net_backward(self, diffs=None, start=None, end=None, **kwargs):
             raise Exception('Top diff arguments do not match net outputs.')
         # Set top diffs according to defined shapes and make arrays single and
         # C-contiguous as Caffe expects.
-        for top, diff in kwargs.iteritems():
-            if diff.ndim != 4:
-                raise Exception('{} diff is not 4-d'.format(top))
-            if diff.shape[0] != self.blobs[top].num:
+        for top, diff in six.iteritems(kwargs):
+            if diff.shape[0] != self.blobs[top].shape[0]:
                 raise Exception('Diff is not batch sized')
             self.blobs[top].diff[...] = diff
 
@@ -333,25 +348,27 @@ def _Net_forward_all(self, blobs=None, **kwargs):
     """
     Run net forward in batches.
 
-    Take
-    blobs: list of blobs to extract as in forward()
-    kwargs: Keys are input blob names and values are blob ndarrays.
-            Refer to forward().
+    Parameters
+    ----------
+    blobs : list of blobs to extract as in forward()
+    kwargs : Keys are input blob names and values are blob ndarrays.
+             Refer to forward().
 
-    Give
-    all_outs: {blob name: list of blobs} dict.
+    Returns
+    -------
+    all_outs : {blob name: list of blobs} dict.
     """
     # Collect outputs from batches
     all_outs = {out: [] for out in set(self.outputs + (blobs or []))}
     for batch in self._batch(kwargs):
         outs = self.forward(blobs=blobs, **batch)
-        for out, out_blob in outs.iteritems():
+        for out, out_blob in six.iteritems(outs):
             all_outs[out].extend(out_blob.copy())
     # Package in ndarray.
     for out in all_outs:
         all_outs[out] = np.asarray(all_outs[out])
     # Discard padding.
-    pad = len(all_outs.itervalues().next()) - len(kwargs.itervalues().next())
+    pad = len(six.next(six.itervalues(all_outs))) - len(six.next(six.itervalues(kwargs)))
     if pad:
         for out in all_outs:
             all_outs[out] = all_outs[out][:-pad]
@@ -362,14 +379,16 @@ def _Net_forward_backward_all(self, blobs=None, diffs=None, **kwargs):
     """
     Run net forward + backward in batches.
 
-    Take
+    Parameters
+    ----------
     blobs: list of blobs to extract as in forward()
     diffs: list of diffs to extract as in backward()
     kwargs: Keys are input (for forward) and output (for backward) blob names
             and values are ndarrays. Refer to forward() and backward().
             Prefilled variants are called for lack of input or output blobs.
 
-    Give
+    Returns
+    -------
     all_blobs: {blob name: blob ndarray} dict.
     all_diffs: {blob name: diff ndarray} dict.
     """
@@ -384,16 +403,16 @@ def _Net_forward_backward_all(self, blobs=None, diffs=None, **kwargs):
     for fb, bb in izip_longest(forward_batches, backward_batches, fillvalue={}):
         batch_blobs = self.forward(blobs=blobs, **fb)
         batch_diffs = self.backward(diffs=diffs, **bb)
-        for out, out_blobs in batch_blobs.iteritems():
-            all_outs[out].extend(out_blobs)
-        for diff, out_diffs in batch_diffs.iteritems():
-            all_diffs[diff].extend(out_diffs)
+        for out, out_blobs in six.iteritems(batch_blobs):
+            all_outs[out].extend(out_blobs.copy())
+        for diff, out_diffs in six.iteritems(batch_diffs):
+            all_diffs[diff].extend(out_diffs.copy())
     # Package in ndarray.
     for out, diff in zip(all_outs, all_diffs):
         all_outs[out] = np.asarray(all_outs[out])
         all_diffs[diff] = np.asarray(all_diffs[diff])
     # Discard padding at the end and package in ndarray.
-    pad = len(all_outs.itervalues().next()) - len(kwargs.itervalues().next())
+    pad = len(six.next(six.itervalues(all_outs))) - len(six.next(six.itervalues(kwargs)))
     if pad:
         for out, diff in zip(all_outs, all_diffs):
             all_outs[out] = all_outs[out][:-pad]
@@ -416,17 +435,19 @@ def _Net_batch(self, blobs):
     """
     Batch blob lists according to net's batch size.
 
-    Take
+    Parameters
+    ----------
     blobs: Keys blob names and values are lists of blobs (of any length).
            Naturally, all the lists should have the same length.
 
-    Give (yield)
+    Yields
+    ------
     batch: {blob name: list of blobs} dict for a single batch.
     """
-    num = len(blobs.itervalues().next())
-    batch_size = self.blobs.itervalues().next().num
+    num = len(six.next(six.itervalues(blobs)))
+    batch_size = six.next(six.itervalues(self.blobs)).shape[0]
     remainder = num % batch_size
-    num_batches = num / batch_size
+    num_batches = num // batch_size
 
     # Yield full batches.
     for b in range(num_batches):
@@ -443,8 +464,25 @@ def _Net_batch(self, blobs):
                                                  padding])
         yield padded_batch
 
+
+class _Net_IdNameWrapper:
+    """
+    A simple wrapper that allows the ids propery to be accessed as a dict
+    indexed by names. Used for top and bottom names
+    """
+    def __init__(self, net, func):
+        self.net, self.func = net, func
+
+    def __getitem__(self, name):
+        # Map the layer name to id
+        ids = self.func(self.net, list(self.net._layer_names).index(name))
+        # Map the blob id to name
+        id_to_name = list(self.net.blobs)
+        return [id_to_name[i] for i in ids]
+
 # Attach methods to Net.
 Net.blobs = _Net_blobs
+Net.blob_loss_weights = _Net_blob_loss_weights
 Net.params = _Net_params
 Net.zero = _Net_zero
 Net.backward_from_layer = _Net_backward_from_layer
@@ -460,3 +498,5 @@ Net.set_input_arrays = _Net_set_input_arrays
 Net._batch = _Net_batch
 Net.inputs = _Net_inputs
 Net.outputs = _Net_outputs
+Net.top_names = property(lambda n: _Net_IdNameWrapper(n, Net._top_ids))
+Net.bottom_names = property(lambda n: _Net_IdNameWrapper(n, Net._bottom_ids))
