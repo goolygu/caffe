@@ -59,9 +59,9 @@ void ReLULayer<Dtype>::Backward_gpu(const vector<Blob<Dtype>*>& top,
 
 template <typename Dtype>
 __global__ void ReLUDeconv(const int n, const Dtype* in_diff,
-    Dtype* out_diff) {
+    const Dtype* in_data, Dtype* out_diff) {
   CUDA_KERNEL_LOOP(index, n) {
-    out_diff[index] = in_diff[index] > 0 ? in_diff[index] : 0;
+    out_diff[index] = (in_diff[index] > 0 ? in_diff[index] : 0) * (in_data[index] > 0);
   }
 }
 
@@ -79,7 +79,7 @@ void ReLULayer<Dtype>::Deconv_gpu(const vector<Blob<Dtype>*>& top,
       LOG(WARNING) << "negative_slope parameter = " << negative_slope << " but nonzero negative_slope params are not supported for Deconv through RELU.";
     // NOLINT_NEXT_LINE(whitespace/operators)
     ReLUDeconv<Dtype><<<CAFFE_GET_BLOCKS(count), CAFFE_CUDA_NUM_THREADS>>>(
-        count, top_diff, bottom_diff);
+        count, top_diff, bottom_data, bottom_diff);
     CUDA_POST_KERNEL_CHECK;
   }
 }
